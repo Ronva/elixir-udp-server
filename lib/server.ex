@@ -1,6 +1,6 @@
 defmodule Client do
-  @enforce_keys [:socket, :id]
-  defstruct socket: nil, pos: %{:x => 0, :y => 0}, id: nil
+  @enforce_keys [:id]
+  defstruct id: nil, pos: %{:x => 0, :y => 0}
 
   def modify_pos(client, dx, dy) do
     %{client | pos: %{x: client.pos.x + dx, y: client.pos.y + dy}}
@@ -22,25 +22,29 @@ end
 
 defmodule UdpServer.Server do
   use GenServer
+  alias UdpServer.Utils, as: Utils
 
   # We need a factory method to create our server process
   # it takes a single parameter `port` which defaults to `2052`
   # This runs in the caller's context
-  def start_link(port \\ 2052) do
+  def start_link(server) do
     System.no_halt(true)
     # Start 'er up
-    GenServer.start_link(__MODULE__, port)
+    GenServer.start_link(__MODULE__, server)
   end
 
   # Initialization that runs in the server context (inside the server process right after it boots)
-  def init(port) do
+  def init(%{addr: _addr, port: port}) do
     state = UdpServer.Container.get()
 
     if state.socket != nil do
       IO.puts("Server restarted, state restored")
     end
 
-    {:ok, socket} = :gen_udp.open(port, [:binary, active: true])
+    {:ok, socket} = :gen_udp.open(port, [:binary, active: true, multicast_loop: false, reuseaddr: true])
+    # TODO: Move to multicast
+    # :inet.setopts(socket, [ip: addr, add_membership: {addr, {0,0,0,0}}, multicast_ttl: 4])
+
     {:ok, %{state | :socket => socket}}
   end
 
@@ -50,8 +54,8 @@ defmodule UdpServer.Server do
   end
 
   # define a callback handler for when gen_udp sends us a UDP packet
-  def handle_info({:udp, client_socket, _address, port, data}, state) do
-    {:noreply, state} = handle_packet({data, port, client_socket}, state)
+  def handle_info({:udp, _socket, _address, port, data}, state) do
+    {:noreply, state} = handle_packet({data, port}, state)
     UdpServer.Container.update(state)
     {:noreply, state}
   end
@@ -61,22 +65,11 @@ defmodule UdpServer.Server do
     {:noreply, state}
   end
 
-  defp gen_id(clients) when clients == %{}, do: 1
-
-  defp gen_id(clients) when clients != %{} do
-    Map.values(clients)
-    |> Enum.map(fn %{id: id} -> id end)
-    |> Enum.max()
-    # increment id
-    |> Kernel.+(1)
-  end
-
   # client connects
-  defp handle_packet({"connect", port, client_socket}, state) do
+  defp handle_packet({"connect", port}, state) do
     IO.puts("#{port} connected")
 
-    client_id = gen_id(state.clients)
-    new_client = %Client{socket: client_socket, id: client_id}
+    new_client = %Client{id: Utils.gen_id(state.clients)}
     updated_clients = Map.put(state.clients, port, new_client)
 
     if state.clients != %{} do
@@ -94,7 +87,7 @@ defmodule UdpServer.Server do
   end
 
   # client disconnects
-  defp handle_packet({"disconnect", port, _client_socket}, state) do
+  defp handle_packet({"disconnect", port}, state) do
     IO.puts("#{port} disconnected")
 
     updated_clients = Map.delete(state.clients, port)
@@ -102,14 +95,8 @@ defmodule UdpServer.Server do
     {:noreply, %{state | :clients => updated_clients}}
   end
 
-  # restart
-  # defp handle_packet("restart", _port, _client_socket, socket) do
-  #   :gen_udp.close(socket)
-  #   {:stop, :normal, nil}
-  # end
-
   # pattern match to handle all other messages
-  defp handle_packet({data, port, _client_socket}, state) do
+  defp handle_packet({data, port}, state) do
     if Map.has_key?(state.clients, port) do
       client = state.clients[port]
 

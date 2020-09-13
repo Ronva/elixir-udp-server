@@ -1,3 +1,8 @@
+defmodule Server do
+  @enforce_keys [:room_id, :addr, :port]
+  defstruct room_id: nil, addr: nil, port: nil
+end
+
 defmodule UdpServer.Application do
   @moduledoc false
 
@@ -8,7 +13,7 @@ defmodule UdpServer.Application do
 
     children = [
       {UdpServer.Container, default_container_state},
-      {UdpServer.Server, 2052}
+      {UdpServer.Server, %Server{room_id: 1, addr: {224,0,0,251}, port: 2052}}
     ]
 
     opts = [strategy: :rest_for_one, name: UdpServer.Supervisor]
