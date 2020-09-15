@@ -41,7 +41,9 @@ defmodule UdpServer.Server do
       IO.puts("Server restarted, state restored")
     end
 
-    {:ok, socket} = :gen_udp.open(port, [:binary, active: true, multicast_loop: false, reuseaddr: true])
+    {:ok, socket} =
+      :gen_udp.open(port, [:binary, active: true, multicast_loop: false, reuseaddr: true])
+
     # TODO: Move to multicast
     # :inet.setopts(socket, [ip: addr, add_membership: {addr, {0,0,0,0}}, multicast_ttl: 4])
 
@@ -75,12 +77,12 @@ defmodule UdpServer.Server do
     if state.clients != %{} do
       other_player_positions =
         Map.to_list(state.clients)
-        |> Enum.reduce("", fn {client_port, %{id: id, pos: pos}}, acc ->
-          if client_port != port, do: "#{id},#{pos.x},#{pos.y};" <> acc, else: acc
+        |> Enum.reduce("c:", fn {client_port, %{id: id, pos: pos}}, acc ->
+          if client_port != port, do: acc <> "#{id},#{pos.x},#{pos.y};", else: acc
         end)
         |> String.slice(0..-2)
 
-      send_to_client(state.socket, port, "c:#{other_player_positions}")
+      send_to_client(state.socket, port, other_player_positions)
     end
 
     {:noreply, %{state | :clients => updated_clients}}
@@ -90,8 +92,10 @@ defmodule UdpServer.Server do
   defp handle_packet({"disconnect", port}, state) do
     IO.puts("#{port} disconnected")
 
-    updated_clients = Map.delete(state.clients, port)
+    %{id: id} = Map.get(state.clients, port)
+    broadcast("d:#{id}", port, state)
 
+    updated_clients = Map.delete(state.clients, port)
     {:noreply, %{state | :clients => updated_clients}}
   end
 
@@ -119,17 +123,16 @@ defmodule UdpServer.Server do
     updated_clients = Map.replace!(state.clients, port, modified_client)
     updated_state = %{state | :clients => updated_clients}
 
-    # broadcast the new position to all other players
-    broadcast_client_change({port, modified_client}, state)
+    # when a player's position changes we send
+    # their new position to all other players
+    %{id: id, pos: pos} = modified_client
+    data = "u:#{id},#{pos.x},#{pos.y}"
+    broadcast(data, port, state)
 
     updated_state
   end
 
-  defp broadcast_client_change({port, %{id: id, pos: pos}}, %{socket: socket, clients: clients}) do
-    data = "u:#{id},#{pos.x},#{pos.y}"
-
-    # when a player's position changes we send
-    # their new position to all other players
+  defp broadcast(data, port, %{socket: socket, clients: clients}) do
     Map.keys(clients)
     |> Enum.each(fn client_port ->
       if client_port != port, do: send_to_client(socket, client_port, data)
